@@ -1,0 +1,117 @@
+# Default Actuarial Pipeline - Cluster Compute
+resources:
+  jobs:
+    default_cluster:
+      name: "Default Actuarial Pipeline (Cluster)"
+      
+      # Job metadata
+      tags:
+        environment: ${var.environment}
+        global_entity_id: "pipeline-default-v1.0.0"
+        pipeline_version: "1.0.0"
+        client_specific: "false"
+        compute_type: "cluster"
+        github_release_tag: ${var.github_release_tag}
+        model_repo_tag: ${var.model_repo_tag}
+      
+      # Job settings
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+      max_retries: 0
+      min_retry_interval_millis: 1000
+      
+      # Email notifications
+      email_notifications:
+        on_start: ${var.email_notifications.on_start}
+        on_success: ${var.email_notifications.on_success}
+        on_failure: ${var.email_notifications.on_failure}
+      
+      # Tasks (sequential notebooks)
+      tasks:
+        - task_key: step_1_data_ingest
+          description: "Import and clean data"
+          notebook_task:
+            notebook_path: "${var.model_repo_path}/notebooks/default/step_1_data_ingest"
+            base_parameters:
+              env: ${var.environment}
+              job_id: "pipeline-default-v1.0.0"
+              pipeline_id: "pipeline-default-v1.0.0"
+              snapshot_id: "${var.GITHUB_RUN_ID}"
+              github_release_tag: ${var.github_release_tag}
+              model_repo_tag: ${var.model_repo_tag}
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: ${var.num_workers}
+            spark_conf:
+              "spark.databricks.cluster.profile": "singleNode"
+              "spark.master": "local[*]"
+            custom_tags:
+              environment: ${var.environment}
+              job_id: "pipeline-default-v1.0.0"
+          timeout_seconds: 3600
+        
+        - task_key: step_2_transform
+          description: "Transform and prepare data"
+          notebook_task:
+            notebook_path: "${var.model_repo_path}/notebooks/default/step_2_transform"
+            base_parameters:
+              env: ${var.environment}
+              job_id: "pipeline-default-v1.0.0"
+              snapshot_id: "${var.GITHUB_RUN_ID}"
+              github_release_tag: ${var.github_release_tag}
+              model_repo_tag: ${var.model_repo_tag}
+          depends_on:
+            - task_key: step_1_data_ingest
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: ${var.num_workers}
+            spark_conf:
+              "spark.databricks.cluster.profile": "singleNode"
+              "spark.master": "local[*]"
+            custom_tags:
+              environment: ${var.environment}
+              job_id: "pipeline-default-v1.0.0"
+          timeout_seconds: 3600
+        
+        - task_key: step_3_calculate_model
+          description: "Calculate actuarial model and save snapshot"
+          notebook_task:
+            notebook_path: "${var.model_repo_path}/notebooks/default/step_3_calculate_model"
+            base_parameters:
+              env: ${var.environment}
+              job_id: "pipeline-default-v1.0.0"
+              snapshot_id: "${var.GITHUB_RUN_ID}"
+              github_release_tag: ${var.github_release_tag}
+              model_repo_tag: ${var.model_repo_tag}
+          depends_on:
+            - task_key: step_2_transform
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: ${var.num_workers}
+            spark_conf:
+              "spark.databricks.cluster.profile": "singleNode"
+              "spark.master": "local[*]"
+            custom_tags:
+              environment: ${var.environment}
+              job_id: "pipeline-default-v1.0.0"
+          timeout_seconds: 3600
+        
+        # Cleanup task (runs on failure)
+        - task_key: cleanup_on_failure
+          description: "Cleanup task that runs when any previous task fails"
+          notebook_task:
+            notebook_path: "${var.model_repo_path}/scripts/cleanup_notebook"
+            base_parameters:
+              env: ${var.environment}
+              run_id: "${var.GITHUB_RUN_ID}"
+          depends_on:
+            - task_key: step_3_calculate_model
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: 0  # Single node for cleanup
+          run_if: AT_LEAST_ONE_FAILED
+

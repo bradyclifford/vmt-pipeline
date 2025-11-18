@@ -1,22 +1,8 @@
-name: Run Databricks Pipeline
+name: Deploy Databricks Bundle
 
 on:
   workflow_dispatch:
     inputs:
-      job_name:
-        description: 'Job name (default, centene, etc.)'
-        required: true
-        type: choice
-        options:
-          - default
-          - centene
-      compute_type:
-        description: 'Compute type'
-        required: true
-        type: choice
-        options:
-          - serverless
-          - cluster
       environment:
         description: 'Target environment'
         required: true
@@ -27,29 +13,34 @@ on:
           - stage
           - prod
       github_release_tag:
-        description: 'GitHub release tag for bundle version'
+        description: 'GitHub release tag (e.g., v1.0.0)'
         required: false
         default: 'latest'
       model_repo_tag:
         description: 'Model repository tag/branch'
         required: false
         default: 'main'
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'  # Trigger on version tags
 
 jobs:
-  run-pipeline:
+  deploy:
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment }}
+    environment: ${{ github.event.inputs.environment || 'dev' }}
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # Full history for tags
       
       - name: Determine release tag
         id: release_tag
         run: |
-          if [ -n "${{ github.event.inputs.github_release_tag }}" ] && [ "${{ github.event.inputs.github_release_tag }}" != "latest" ]; then
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             RELEASE_TAG="${{ github.event.inputs.github_release_tag }}"
           elif [ -n "${{ github.ref }}" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
             RELEASE_TAG="${GITHUB_REF#refs/tags/}"
@@ -72,7 +63,7 @@ jobs:
           ${{ secrets.DATABRICKS_TOKEN }}
           EOF
       
-      - name: Ensure bundle is deployed
+      - name: Validate bundle
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
@@ -84,10 +75,9 @@ jobs:
           GITHUB_RELEASE_TAG: ${{ steps.release_tag.outputs.release_tag }}
           MODEL_REPO_TAG: ${{ github.event.inputs.model_repo_tag || 'main' }}
         run: |
-          # Deploy bundle if not already deployed with this release tag
-          databricks bundle deploy -t ${{ github.event.inputs.environment }} || true
+          databricks bundle validate -t ${{ github.event.inputs.environment || 'dev' }}
       
-      - name: Run pipeline job
+      - name: Deploy bundle
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
@@ -98,28 +88,17 @@ jobs:
           MODEL_REPO_NAME: ${{ vars.MODEL_REPO_NAME }}
           GITHUB_RELEASE_TAG: ${{ steps.release_tag.outputs.release_tag }}
           MODEL_REPO_TAG: ${{ github.event.inputs.model_repo_tag || 'main' }}
-          JOB_NAME: ${{ github.event.inputs.job_name }}
-          COMPUTE_TYPE: ${{ github.event.inputs.compute_type }}
         run: |
-          FULL_JOB_NAME="${JOB_NAME}_${COMPUTE_TYPE}"
-          echo "Running job: ${FULL_JOB_NAME}"
-          echo "Environment: ${{ github.event.inputs.environment }}"
+          echo "Deploying bundle to ${{ github.event.inputs.environment || 'dev' }}"
           echo "Release tag: ${{ steps.release_tag.outputs.release_tag }}"
           echo "Model repo tag: ${{ github.event.inputs.model_repo_tag || 'main' }}"
           
-          databricks bundle run ${FULL_JOB_NAME} -t ${{ github.event.inputs.environment }}
+          databricks bundle deploy -t ${{ github.event.inputs.environment || 'dev' }}
       
-      - name: Get run status
-        id: run_status
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          JOB_NAME: ${{ github.event.inputs.job_name }}
-          COMPUTE_TYPE: ${{ github.event.inputs.compute_type }}
+      - name: Output deployment info
         run: |
-          # Get the latest run for the job
-          FULL_JOB_NAME="${JOB_NAME}_${COMPUTE_TYPE}"
-          RUN_INFO=$(databricks bundle run-status ${FULL_JOB_NAME} -t ${{ github.event.inputs.environment }} --output json || echo '{}')
-          echo "run_info<<EOF" >> $GITHUB_OUTPUT
-          echo "${RUN_INFO}" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "✅ Bundle deployed successfully"
+          echo "Environment: ${{ github.event.inputs.environment || 'dev' }}"
+          echo "Release tag: ${{ steps.release_tag.outputs.release_tag }}"
+          echo "Model repo tag: ${{ github.event.inputs.model_repo_tag || 'main' }}"
+

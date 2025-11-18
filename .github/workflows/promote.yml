@@ -67,24 +67,33 @@ jobs:
         uses: actions/checkout@v4
         ref: v${{ github.event.inputs.version }}
 
-      - name: Setup Terraform
-        uses: hashicorp/terraform-github-actions@v2
-        with:
-          tf_actions_version: latest
+      - name: Install Databricks CLI
+        uses: databricks/setup-cli@v1
 
-      - name: Terraform Init
-        working-directory: terraform
-        run: terraform init
-
-      - name: Terraform Apply
-        working-directory: terraform
+      - name: Configure Databricks CLI
         env:
-          TF_VAR_databricks_host: ${{ secrets[format('DATABRICKS_HOST_{0}', matrix.env)] }}
-          TF_VAR_databricks_token: ${{ secrets[format('DATABRICKS_TOKEN_{0}', matrix.env)] }}
-          TF_VAR_environment: ${{ matrix.env }}
+          DATABRICKS_HOST: ${{ secrets[format('DATABRICKS_HOST_{0}', matrix.env)] }}
+          DATABRICKS_TOKEN: ${{ secrets[format('DATABRICKS_TOKEN_{0}', matrix.env)] }}
         run: |
-          terraform workspace select ${{ matrix.env }} || terraform workspace new ${{ matrix.env }}
-          terraform apply -auto-approve
+          databricks configure --token << EOF
+          ${{ secrets[format('DATABRICKS_HOST_{0}', matrix.env)] }}
+          ${{ secrets[format('DATABRICKS_TOKEN_{0}', matrix.env)] }}
+          EOF
+
+      - name: Deploy Bundle
+        env:
+          DATABRICKS_HOST: ${{ secrets[format('DATABRICKS_HOST_{0}', matrix.env)] }}
+          DATABRICKS_TOKEN: ${{ secrets[format('DATABRICKS_TOKEN_{0}', matrix.env)] }}
+          GITHUB_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+          GITHUB_REF_NAME: v${{ github.event.inputs.version }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          MODEL_REPO_ORG: ${{ vars.MODEL_REPO_ORG }}
+          MODEL_REPO_NAME: ${{ vars.MODEL_REPO_NAME }}
+          GITHUB_RELEASE_TAG: v${{ github.event.inputs.version }}
+          MODEL_REPO_TAG: ${{ github.event.inputs.model_repo_tag || 'main' }}
+        run: |
+          databricks bundle validate -t ${{ matrix.env }}
+          databricks bundle deploy -t ${{ matrix.env }}
 
   run-tests:
     needs: deploy-to-dev-qa
@@ -125,24 +134,33 @@ jobs:
         uses: actions/checkout@v4
         ref: v${{ github.event.inputs.version }}
 
-      - name: Setup Terraform
-        uses: hashicorp/terraform-github-actions@v2
-        with:
-          tf_actions_version: latest
+      - name: Install Databricks CLI
+        uses: databricks/setup-cli@v1
 
-      - name: Terraform Init
-        working-directory: terraform
-        run: terraform init
-
-      - name: Terraform Apply
-        working-directory: terraform
+      - name: Configure Databricks CLI
         env:
-          TF_VAR_databricks_host: ${{ secrets[format('DATABRICKS_HOST_{0}', matrix.env)] }}
-          TF_VAR_databricks_token: ${{ secrets[format('DATABRICKS_TOKEN_{0}', matrix.env)] }}
-          TF_VAR_environment: ${{ matrix.env }}
+          DATABRICKS_HOST: ${{ secrets[format('DATABRICKS_HOST_{0}', matrix.env)] }}
+          DATABRICKS_TOKEN: ${{ secrets[format('DATABRICKS_TOKEN_{0}', matrix.env)] }}
         run: |
-          terraform workspace select ${{ matrix.env }} || terraform workspace new ${{ matrix.env }}
-          terraform apply -auto-approve
+          databricks configure --token << EOF
+          ${{ secrets[format('DATABRICKS_HOST_{0}', matrix.env)] }}
+          ${{ secrets[format('DATABRICKS_TOKEN_{0}', matrix.env)] }}
+          EOF
+
+      - name: Deploy Bundle
+        env:
+          DATABRICKS_HOST: ${{ secrets[format('DATABRICKS_HOST_{0}', matrix.env)] }}
+          DATABRICKS_TOKEN: ${{ secrets[format('DATABRICKS_TOKEN_{0}', matrix.env)] }}
+          GITHUB_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+          GITHUB_REF_NAME: v${{ github.event.inputs.version }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          MODEL_REPO_ORG: ${{ vars.MODEL_REPO_ORG }}
+          MODEL_REPO_NAME: ${{ vars.MODEL_REPO_NAME }}
+          GITHUB_RELEASE_TAG: v${{ github.event.inputs.version }}
+          MODEL_REPO_TAG: ${{ github.event.inputs.model_repo_tag || 'main' }}
+        run: |
+          databricks bundle validate -t ${{ matrix.env }}
+          databricks bundle deploy -t ${{ matrix.env }}
 
   update-vmt-datastore:
     needs: [create-release, deploy-to-stage-prod]

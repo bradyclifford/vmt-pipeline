@@ -1,0 +1,108 @@
+# Databricks Asset Bundle Configuration
+# Root configuration for VMT Actuarial Pipeline
+
+bundle:
+  name: vmt-actuarial-pipeline
+  git:
+    origin_url: ${var.GITHUB_REPOSITORY_URL}
+    branch: ${var.GITHUB_REF_NAME}
+  
+  # Enable automatic asset synchronization
+  sync:
+    include:
+      - "resources/**"
+
+# Include all job definitions
+include:
+  - resources/jobs/*.yml
+
+# Global variables
+variables:
+  model_repo_path:
+    description: "Path to model repository in Databricks Repos"
+    default: "/Repos/${var.MODEL_REPO_ORG}/${var.MODEL_REPO_NAME}"
+  
+  model_repo_tag:
+    description: "Git tag/version of model repository to use"
+    default: "main"
+  
+  github_release_tag:
+    description: "GitHub release tag for this bundle deployment"
+    default: "latest"
+  
+  # Cluster configuration (for cluster-based jobs)
+  spark_version:
+    description: "Spark version for clusters"
+    default: "13.2.x-scala2.12"
+  
+  node_type_id:
+    description: "Node type for cluster instances"
+    default: "i3.xlarge"
+  
+  num_workers:
+    description: "Number of worker nodes"
+    default: 2
+  
+  # Notification settings
+  email_notifications:
+    description: "Email addresses for job notifications"
+    default:
+      on_start: []
+      on_success: []
+      on_failure: []
+
+# Environment targets
+targets:
+  dev:
+    mode: development
+    default: true
+    variables:
+      environment: "dev"
+      databricks_host: "${var.DATABRICKS_HOST_DEV}"
+    resources:
+      jobs:
+        default_serverless:
+          name: "default-pipeline-dev-serverless"
+        default_cluster:
+          name: "default-pipeline-dev-cluster"
+        centene_serverless:
+          name: "centene-pipeline-dev-serverless"
+        centene_cluster:
+          name: "centene-pipeline-dev-cluster"
+  
+  qa:
+    mode: production
+    variables:
+      environment: "qa"
+      databricks_host: "${var.DATABRICKS_HOST_QA}"
+    resources:
+      jobs:
+        default_serverless:
+          name: "default-pipeline-qa-serverless"
+        default_cluster:
+          name: "default-pipeline-qa-cluster"
+  
+  stage:
+    mode: production
+    variables:
+      environment: "stage"
+      databricks_host: "${var.DATABRICKS_HOST_STAGE}"
+    resources:
+      jobs:
+        default_serverless:
+          name: "default-pipeline-stage-serverless"
+        default_cluster:
+          name: "default-pipeline-stage-cluster"
+  
+  prod:
+    mode: production
+    variables:
+      environment: "prod"
+      databricks_host: "${var.DATABRICKS_HOST_PROD}"
+    resources:
+      jobs:
+        default_serverless:
+          name: "default-pipeline-prod-serverless"
+        default_cluster:
+          name: "default-pipeline-prod-cluster"
+

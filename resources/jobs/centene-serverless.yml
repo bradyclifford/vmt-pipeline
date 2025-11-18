@@ -1,0 +1,82 @@
+# Centene Actuarial Pipeline - Serverless Compute
+resources:
+  jobs:
+    centene_serverless:
+      name: "Centene Actuarial Pipeline (Serverless)"
+      
+      tags:
+        environment: ${var.environment}
+        global_entity_id: "pipeline-centene-v1.0.0"
+        pipeline_version: "1.0.0"
+        client_specific: "true"
+        client_entity_id: "client-centene-001"
+        compute_type: "serverless"
+        github_release_tag: ${var.github_release_tag}
+        model_repo_tag: ${var.model_repo_tag}
+      
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+      max_retries: 0
+      
+      email_notifications:
+        on_start: ${var.email_notifications.on_start}
+        on_success: ${var.email_notifications.on_success}
+        on_failure: ${var.email_notifications.on_failure}
+      
+      tasks:
+        - task_key: step_1_data_ingest
+          description: "Centene-specific data ingestion"
+          notebook_task:
+            notebook_path: "${var.model_repo_path}/notebooks/centene/step_1_data_ingest"
+            base_parameters:
+              env: ${var.environment}
+              job_id: "pipeline-centene-v1.0.0"
+              client_entity_id: "client-centene-001"
+              snapshot_id: "${var.GITHUB_RUN_ID}"
+              github_release_tag: ${var.github_release_tag}
+              model_repo_tag: ${var.model_repo_tag}
+          compute_key: "serverless-compute"
+          timeout_seconds: 3600
+        
+        - task_key: step_2_transform
+          description: "Transform data (fallback to default if not found)"
+          notebook_task:
+            notebook_path: "${var.model_repo_path}/notebooks/default/step_2_transform"
+            base_parameters:
+              env: ${var.environment}
+              job_id: "pipeline-centene-v1.0.0"
+              snapshot_id: "${var.GITHUB_RUN_ID}"
+              github_release_tag: ${var.github_release_tag}
+              model_repo_tag: ${var.model_repo_tag}
+          depends_on:
+            - task_key: step_1_data_ingest
+          compute_key: "serverless-compute"
+          timeout_seconds: 3600
+        
+        - task_key: step_3_calculate_model
+          description: "Centene-specific model calculation"
+          notebook_task:
+            notebook_path: "${var.model_repo_path}/notebooks/centene/step_3_calculate_model"
+            base_parameters:
+              env: ${var.environment}
+              job_id: "pipeline-centene-v1.0.0"
+              snapshot_id: "${var.GITHUB_RUN_ID}"
+              github_release_tag: ${var.github_release_tag}
+              model_repo_tag: ${var.model_repo_tag}
+          depends_on:
+            - task_key: step_2_transform
+          compute_key: "serverless-compute"
+          timeout_seconds: 3600
+        
+        - task_key: cleanup_on_failure
+          description: "Cleanup on failure"
+          notebook_task:
+            notebook_path: "${var.model_repo_path}/scripts/cleanup_notebook"
+            base_parameters:
+              env: ${var.environment}
+              run_id: "${var.GITHUB_RUN_ID}"
+          depends_on:
+            - task_key: step_3_calculate_model
+          compute_key: "serverless-compute"
+          run_if: AT_LEAST_ONE_FAILED
+

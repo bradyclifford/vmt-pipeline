@@ -1,0 +1,114 @@
+name: Create Release and Deploy Bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'SemVer version (e.g., 1.0.0)'
+        required: true
+      environment:
+        description: 'Target environment for deployment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - qa
+          - stage
+          - prod
+      model_repo_tag:
+        description: 'Model repository tag/branch to use'
+        required: false
+        default: 'main'
+      deploy_after_release:
+        description: 'Deploy bundle after creating release?'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Create Git tag
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          TAG="v${VERSION}"
+          
+          # Check if tag already exists
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists"
+            exit 1
+          fi
+          
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+      
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          release_name: Release v${{ github.event.inputs.version }}
+          body: |
+            Release v${{ github.event.inputs.version }}
+            
+            ## Deployment Information
+            - Environment: ${{ github.event.inputs.environment }}
+            - Model Repository Tag: ${{ github.event.inputs.model_repo_tag || 'main' }}
+            - Created: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+            
+            ## Changes
+            See commit history for details.
+          draft: false
+          prerelease: ${{ github.event.inputs.environment != 'prod' }}
+  
+  deploy-bundle:
+    needs: create-release
+    if: github.event.inputs.deploy_after_release == true
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ github.event.inputs.version }}
+      
+      - name: Install Databricks CLI
+        uses: databricks/setup-cli@v1
+      
+      - name: Configure Databricks CLI
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          databricks configure --token << EOF
+          ${{ secrets.DATABRICKS_HOST }}
+          ${{ secrets.DATABRICKS_TOKEN }}
+          EOF
+      
+      - name: Deploy bundle with release tag
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          GITHUB_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+          GITHUB_REF_NAME: v${{ github.event.inputs.version }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          MODEL_REPO_ORG: ${{ vars.MODEL_REPO_ORG }}
+          MODEL_REPO_NAME: ${{ vars.MODEL_REPO_NAME }}
+          GITHUB_RELEASE_TAG: v${{ github.event.inputs.version }}
+          MODEL_REPO_TAG: ${{ github.event.inputs.model_repo_tag || 'main' }}
+        run: |
+          echo "Deploying bundle version v${{ github.event.inputs.version }}"
+          databricks bundle validate -t ${{ github.event.inputs.environment }}
+          databricks bundle deploy -t ${{ github.event.inputs.environment }}
+

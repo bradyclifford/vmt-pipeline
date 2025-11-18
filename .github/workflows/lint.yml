@@ -37,18 +37,24 @@ jobs:
       - name: Run mypy (type checking)
         run: mypy scripts/ --ignore-missing-imports || true
 
-      - name: Terraform Format Check
-        uses: hashicorp/terraform-github-actions@v2
-        with:
-          tf_actions_version: latest
-        env:
-          TF_ACTION_WORKING_DIR: terraform
+      - name: Install Databricks CLI
+        uses: databricks/setup-cli@v1
 
-      - name: Terraform Validate
-        uses: hashicorp/terraform-github-actions@v2
-        with:
-          tf_actions_version: latest
-          tf_actions_subcommand: validate
+      - name: Validate Databricks Bundle
         env:
-          TF_ACTION_WORKING_DIR: terraform
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          GITHUB_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          MODEL_REPO_ORG: ${{ vars.MODEL_REPO_ORG }}
+          MODEL_REPO_NAME: ${{ vars.MODEL_REPO_NAME }}
+          GITHUB_RELEASE_TAG: "latest"
+          MODEL_REPO_TAG: "main"
+        run: |
+          databricks configure --token << EOF
+          ${{ secrets.DATABRICKS_HOST }}
+          ${{ secrets.DATABRICKS_TOKEN }}
+          EOF
+          databricks bundle validate -t dev
 

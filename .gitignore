@@ -26,14 +26,12 @@ env/
 ENV/
 .venv
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
+# Databricks Bundle
+.databricks/
+*.lock
+databricks.lock
 
-# Terraform
+# Terraform (kept for reference, but not used)
 terraform/.terraform/
 terraform/*.tfstate
 terraform/*.tfstate.*
@@ -54,10 +52,16 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
 # Secrets
 *.pem
 *.key
 secrets/
 .env
 .env.local
-
