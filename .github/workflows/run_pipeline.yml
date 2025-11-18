@@ -1,0 +1,176 @@
+name: Run Databricks Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_name:
+        description: 'Job name to run (e.g., default, ford, centene)'
+        required: true
+        type: choice
+        options:
+          - default
+          - ford
+          - centene
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - qa
+          - stage
+          - prod
+      model_tag:
+        description: 'Git tag or branch of model repository'
+        required: false
+        default: 'main'
+      snapshot_id:
+        description: 'Optional snapshot ID for this run'
+        required: false
+        default: ''
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: Checkout pipeline repository
+        uses: actions/checkout@v4
+        with:
+          path: pipeline-repo
+
+      - name: Checkout model repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.MODEL_REPO_ORG }}/${{ vars.MODEL_REPO_NAME }}
+          ref: ${{ github.event.inputs.model_tag }}
+          token: ${{ secrets.MODEL_REPO_TOKEN }}
+          path: model-repo
+
+      - name: Install Databricks CLI
+        uses: databricks/setup-cli@v1
+
+      - name: Configure Databricks CLI
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          databricks configure --token << EOF
+          ${{ secrets.DATABRICKS_HOST }}
+          ${{ secrets.DATABRICKS_TOKEN }}
+          EOF
+
+      - name: Upload notebooks to Databricks
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # Create temporary directory in Databricks workspace
+          TEMP_PATH="/tmp/job-${RUN_ID}"
+          
+          # Upload notebooks from model repo
+          databricks workspace import_dir \
+            model-repo/notebooks/${{ github.event.inputs.job_name }} \
+            "${TEMP_PATH}/notebooks/${{ github.event.inputs.job_name }}" \
+            --overwrite
+          
+          # Also upload default notebooks for fallback
+          databricks workspace import_dir \
+            model-repo/notebooks/default \
+            "${TEMP_PATH}/notebooks/default" \
+            --overwrite
+
+      - name: Get Job ID from Terraform
+        id: get_job_id
+        working-directory: pipeline-repo/terraform
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          terraform init
+          terraform workspace select ${{ github.event.inputs.environment }} || terraform workspace new ${{ github.event.inputs.environment }}
+          JOB_ID=$(terraform output -json | jq -r '.default_job_job_id.value // empty')
+          echo "job_id=${JOB_ID}" >> $GITHUB_OUTPUT
+
+      - name: Submit Databricks Job Run
+        id: submit_job
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          SNAPSHOT_ID="${{ github.event.inputs.snapshot_id }}"
+          if [ -z "$SNAPSHOT_ID" ]; then
+            SNAPSHOT_ID="snapshot-${RUN_ID}"
+          fi
+          
+          # Use runs-submit API to override notebook paths
+          RESPONSE=$(curl -X POST "${DATABRICKS_HOST}/api/2.1/jobs/runs-submit" \
+            -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d @- << EOF
+          {
+            "run_name": "pipeline-${RUN_ID}-${{ github.event.inputs.job_name }}",
+            "job_id": ${{ steps.get_job_id.outputs.job_id }},
+            "notebook_params": {
+              "env": "${{ github.event.inputs.environment }}",
+              "snapshot_id": "${SNAPSHOT_ID}",
+              "run_id": "${RUN_ID}",
+              "job_name": "${{ github.event.inputs.job_name }}",
+              "notebook_base_path": "/tmp/job-${RUN_ID}"
+            }
+          }
+          EOF
+          )
+          
+          RUN_NUMBER=$(echo $RESPONSE | jq -r '.run_id')
+          echo "run_number=${RUN_NUMBER}" >> $GITHUB_OUTPUT
+          echo "Submitted job run: ${RUN_NUMBER}"
+
+      - name: Wait for Job Completion
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          RUN_NUMBER=${{ steps.submit_job.outputs.run_number }}
+          MAX_WAIT=3600  # 1 hour
+          ELAPSED=0
+          
+          while [ $ELAPSED -lt $MAX_WAIT ]; do
+            STATUS=$(curl -s -X GET "${DATABRICKS_HOST}/api/2.1/jobs/runs/get?run_id=${RUN_NUMBER}" \
+              -H "Authorization: Bearer ${DATABRICKS_TOKEN}" | jq -r '.state.life_cycle_state')
+            
+            echo "Job status: ${STATUS}"
+            
+            if [ "$STATUS" = "TERMINATED" ]; then
+              RESULT=$(curl -s -X GET "${DATABRICKS_HOST}/api/2.1/jobs/runs/get?run_id=${RUN_NUMBER}" \
+                -H "Authorization: Bearer ${DATABRICKS_TOKEN}" | jq -r '.state.result_state')
+              
+              if [ "$RESULT" = "SUCCESS" ]; then
+                echo "Job completed successfully"
+                exit 0
+              else
+                echo "Job failed with result: ${RESULT}"
+                exit 1
+              fi
+            fi
+            
+            sleep 30
+            ELAPSED=$((ELAPSED + 30))
+          done
+          
+          echo "Job did not complete within timeout"
+          exit 1
+
+      - name: Cleanup temporary notebooks
+        if: always()
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          TEMP_PATH="/tmp/job-${RUN_ID}"
+          databricks workspace delete "${TEMP_PATH}" --recursive || true
+

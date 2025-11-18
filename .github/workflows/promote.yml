@@ -1,0 +1,163 @@
+name: Promote Pipeline/Model
+
+on:
+  workflow_dispatch:
+    inputs:
+      promotion_type:
+        description: 'Type of promotion'
+        required: true
+        type: choice
+        options:
+          - pipeline
+          - model
+          - both
+      version:
+        description: 'SemVer version (e.g., 1.2.3)'
+        required: true
+      environment:
+        description: 'Target environment for promotion'
+        required: true
+        type: choice
+        options:
+          - dev
+          - qa
+          - stage
+          - prod
+      auto_apply:
+        description: 'Automatically apply to Stage/Prod after tests pass?'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          release_name: Release v${{ github.event.inputs.version }}
+          body: |
+            Promotion of ${{ github.event.inputs.promotion_type }} to version ${{ github.event.inputs.version }}
+            
+            Environment: ${{ github.event.inputs.environment }}
+            Auto-apply: ${{ github.event.inputs.auto_apply }}
+          draft: false
+          prerelease: ${{ github.event.inputs.environment != 'prod' }}
+
+  deploy-to-dev-qa:
+    needs: create-release
+    runs-on: ubuntu-latest
+    if: github.event.inputs.promotion_type == 'pipeline' || github.event.inputs.promotion_type == 'both'
+    
+    strategy:
+      matrix:
+        env: [dev, qa]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        ref: v${{ github.event.inputs.version }}
+
+      - name: Setup Terraform
+        uses: hashicorp/terraform-github-actions@v2
+        with:
+          tf_actions_version: latest
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: terraform
+        env:
+          TF_VAR_databricks_host: ${{ secrets[format('DATABRICKS_HOST_{0}', matrix.env)] }}
+          TF_VAR_databricks_token: ${{ secrets[format('DATABRICKS_TOKEN_{0}', matrix.env)] }}
+          TF_VAR_environment: ${{ matrix.env }}
+        run: |
+          terraform workspace select ${{ matrix.env }} || terraform workspace new ${{ matrix.env }}
+          terraform apply -auto-approve
+
+  run-tests:
+    needs: deploy-to-dev-qa
+    runs-on: ubuntu-latest
+    if: github.event.inputs.promotion_type == 'pipeline' || github.event.inputs.promotion_type == 'both'
+    
+    strategy:
+      matrix:
+        env: [dev, qa]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        ref: v${{ github.event.inputs.version }}
+
+      - name: Run Integration Tests
+        uses: ./.github/workflows/run_pipeline.yml
+        with:
+          job_name: default
+          environment: ${{ matrix.env }}
+          model_tag: main
+
+  deploy-to-stage-prod:
+    needs: [create-release, run-tests]
+    runs-on: ubuntu-latest
+    if: |
+      (github.event.inputs.promotion_type == 'pipeline' || github.event.inputs.promotion_type == 'both') &&
+      (github.event.inputs.auto_apply == true || github.event.inputs.environment == 'stage' || github.event.inputs.environment == 'prod')
+    
+    strategy:
+      matrix:
+        env: 
+          - ${{ github.event.inputs.environment == 'stage' && 'stage' || '' }}
+          - ${{ github.event.inputs.environment == 'prod' && 'prod' || '' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        ref: v${{ github.event.inputs.version }}
+
+      - name: Setup Terraform
+        uses: hashicorp/terraform-github-actions@v2
+        with:
+          tf_actions_version: latest
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: terraform
+        env:
+          TF_VAR_databricks_host: ${{ secrets[format('DATABRICKS_HOST_{0}', matrix.env)] }}
+          TF_VAR_databricks_token: ${{ secrets[format('DATABRICKS_TOKEN_{0}', matrix.env)] }}
+          TF_VAR_environment: ${{ matrix.env }}
+        run: |
+          terraform workspace select ${{ matrix.env }} || terraform workspace new ${{ matrix.env }}
+          terraform apply -auto-approve
+
+  update-vmt-datastore:
+    needs: [create-release, deploy-to-stage-prod]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        ref: v${{ github.event.inputs.version }}
+
+      - name: Update VMT Data Store
+        run: |
+          python scripts/update_vmt_datastore.py \
+            --promotion-type ${{ github.event.inputs.promotion_type }} \
+            --version ${{ github.event.inputs.version }} \
+            --environment ${{ github.event.inputs.environment }}
+

@@ -1,0 +1,54 @@
+name: Lint and Format Check
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+  push:
+    branches:
+      - main
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install ruff black isort mypy
+
+      - name: Run Black (format check)
+        run: black --check .
+
+      - name: Run Ruff (linting)
+        run: ruff check .
+
+      - name: Run isort (import sorting check)
+        run: isort --check-only .
+
+      - name: Run mypy (type checking)
+        run: mypy scripts/ --ignore-missing-imports || true
+
+      - name: Terraform Format Check
+        uses: hashicorp/terraform-github-actions@v2
+        with:
+          tf_actions_version: latest
+        env:
+          TF_ACTION_WORKING_DIR: terraform
+
+      - name: Terraform Validate
+        uses: hashicorp/terraform-github-actions@v2
+        with:
+          tf_actions_version: latest
+          tf_actions_subcommand: validate
+        env:
+          TF_ACTION_WORKING_DIR: terraform
+

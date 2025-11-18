@@ -1,0 +1,43 @@
+name: "Default Actuarial Pipeline"
+global_entity_id: "pipeline-default-v1.0.0"
+version: "1.0.0"
+description: "Gold standard pipeline for actuarial modeling"
+
+# Job configuration
+max_concurrent_runs: 1
+timeout_seconds: 7200
+max_retries: 0
+min_retry_interval_millis: 1000
+task_timeout_seconds: 3600
+
+# Client configuration
+client_specific: false
+client_entity_id: null
+
+# Fallback configuration
+fallback_job: null  # null means this is the gold standard
+
+# Notebook sequence (executed in order)
+notebooks:
+  - name: "step_1_data_ingest"
+    path: "/Repos/${MODEL_REPO}/notebooks/default/step_1_data_ingest"
+    description: "Import and clean data"
+    fallback_to: null
+    
+  - name: "step_2_transform"
+    path: "/Repos/${MODEL_REPO}/notebooks/default/step_2_transform"
+    description: "Transform and prepare data"
+    fallback_to: null
+    
+  - name: "step_3_calculate_model"
+    path: "/Repos/${MODEL_REPO}/notebooks/default/step_3_calculate_model"
+    description: "Calculate actuarial model and save snapshot"
+    fallback_to: null
+
+# Optional schedule
+schedule: null
+# schedule:
+#   quartz_cron_expression: "0 0 2 * * ?"  # Daily at 2 AM
+#   timezone_id: "America/New_York"
+#   pause_status: "UNPAUSED"
+
